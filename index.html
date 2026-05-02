@@ -444,6 +444,20 @@
     return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   }
 
+  // 保存後のプレビュー（iOSフォールバック用：長押し保存）
+  function showInlineImage(dataUrl) {
+    let box = document.getElementById('savedImageBox');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'savedImageBox';
+      box.className = 'panel';
+      box.innerHTML = '<p style="margin:0 0 10px;font-size:14px;color:#444;">↓ 画像を長押しして「写真に保存」してな</p><img id="savedImg" style="width:100%;border-radius:6px;border:1px solid #e6e0d2;display:block;">';
+      document.body.appendChild(box);
+    }
+    document.getElementById('savedImg').src = dataUrl;
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   // PNG保存
   saveBtn.addEventListener('click', async () => {
     if (!issuedDate) return;
@@ -459,28 +473,35 @@
       const dateKey = formatDateKey(issuedDate);
       const amountStr = getAmountNumber().toLocaleString('ja-JP').replace(/,/g, '');
       const filename = `領収書_${dateKey}_¥${amountStr}.png`;
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
 
-      if (isIOS()) {
-        // iOS: 新しいタブで画像を開く（長押し保存）
-        canvas.toBlob((blob) => {
-          const url = URL.createObjectURL(blob);
-          const w = window.open(url, '_blank');
-          if (!w) {
-            alert('ポップアップがブロックされたで。Safariの設定確認してな');
-          } else {
-            // フォールバックメッセージ
-            setTimeout(() => {
-              alert('開いた画像を長押しして「写真に保存」してな');
-            }, 300);
+      // 1. Web Share API（iOS Safari 15+ 対応：ネイティブの共有シート起動）
+      if (navigator.canShare) {
+        const file = new File([blob], filename, { type: 'image/png' });
+        if (navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: '領収書' });
+            return; // 成功
+          } catch (e) {
+            if (e.name === 'AbortError') return; // ユーザーがキャンセル
+            // それ以外はフォールバックへ
           }
-        }, 'image/png');
-      } else {
-        // PC等: そのままダウンロード
-        const link = document.createElement('a');
-        link.download = filename;
-        link.href = canvas.toDataURL('image/png');
-        link.click();
+        }
       }
+
+      // 2. iOS でShare API無し：画像をインライン表示して長押し保存
+      if (isIOS()) {
+        showInlineImage(canvas.toDataURL('image/png'));
+        return;
+      }
+
+      // 3. PC：通常ダウンロード
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       console.error(e);
       alert('画像生成でコケた: ' + e.message);
